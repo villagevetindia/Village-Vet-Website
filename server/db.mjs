@@ -1,5 +1,10 @@
 import { MongoClient } from 'mongodb'
 
+function sanitizeMessage(msg) {
+  if (typeof msg !== 'string') return ''
+  return msg.replace(/mongodb(\+srv)?:\/\/[^@\s]+@/gi, 'mongodb$1://***:***@')
+}
+
 let client = null
 let db = null
 let isConnecting = false
@@ -28,7 +33,7 @@ export async function connectDb() {
     return db
   } catch (error) {
     isConnecting = false
-    console.error('Failed to connect to MongoDB:', error.message)
+    console.error('Failed to connect to MongoDB:', sanitizeMessage(error?.message))
     return null
   }
 }
@@ -80,8 +85,8 @@ export async function saveChatLog(log) {
     const result = await database.collection('chat_logs').insertOne(doc)
     return { saved: true, id: result.insertedId }
   } catch (err) {
-    console.error('Failed to save chat log to MongoDB:', err.message)
-    return { saved: false, error: err.message }
+    console.error('Failed to save chat log to MongoDB:', sanitizeMessage(err?.message))
+    return { saved: false, error: 'Database write error' }
   }
 }
 

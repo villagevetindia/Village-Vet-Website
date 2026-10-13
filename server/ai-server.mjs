@@ -24,8 +24,33 @@ function loadLocalEnv() {
   }
 }
 
+function sanitizeError(err) {
+  if (!err) return ''
+  const msg = typeof err === 'string' ? err : err.message || String(err)
+  return msg
+    .replace(/mongodb(\+srv)?:\/\/[^@\s]+@/gi, 'mongodb$1://***:***@')
+    .replace(/key=[A-Za-z0-9._-]+/gi, 'key=***')
+    .replace(/AIza[0-9A-Za-z-_]{35}/g, '***')
+    .replace(/AQ\.[A-Za-z0-9_-]+/g, '***')
+}
+
+function sanitizeLogData(data) {
+  if (!data) return data
+  try {
+    const str = typeof data === 'string' ? data : JSON.stringify(data)
+    const cleaned = str
+      .replace(/mongodb(\+srv)?:\/\/[^@\s]+@/gi, 'mongodb$1://***:***@')
+      .replace(/key=[A-Za-z0-9._-]+/gi, 'key=***')
+      .replace(/AIza[0-9A-Za-z-_]{35}/g, '***')
+      .replace(/AQ\.[A-Za-z0-9_-]+/g, '***')
+    return typeof data === 'string' ? cleaned : JSON.parse(cleaned)
+  } catch {
+    return data
+  }
+}
+
 loadLocalEnv()
-connectDb().catch((err) => console.error('MongoDB startup error:', err.message))
+connectDb().catch((err) => console.error('MongoDB startup error:', sanitizeError(err)))
 
 const PORT = Number(process.env.PORT || process.env.AI_PORT || 8787)
 const HOST = process.env.HOST || '0.0.0.0'
@@ -288,7 +313,7 @@ async function chat(body) {
   const response = await geminiFetch(body, false)
   const data = await response.json().catch(() => ({}))
   if (!response.ok) {
-    console.error('Gemini API error:', response.status, data)
+    console.error('Gemini API error:', response.status, sanitizeLogData(data))
     throw new Error('VillageVet AI is temporarily unavailable. Please try again shortly.')
   }
   const reply = data?.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('').trim()
@@ -306,7 +331,7 @@ async function streamChat(body, res, meta = {}) {
   const response = await geminiFetch(body, true, upstreamController.signal)
   if (!response.ok) {
     const data = await response.json().catch(() => ({}))
-    console.error('Gemini streaming API error:', response.status, data)
+    console.error('Gemini streaming API error:', response.status, sanitizeLogData(data))
     throw new Error('VillageVet AI is temporarily unavailable. Please try again shortly.')
   }
   if (!response.body) throw new Error('VillageVet AI returned no response.')
