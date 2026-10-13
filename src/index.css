@@ -683,11 +683,15 @@ nav[aria-label="Primary"] .header-nav-link{white-space:normal}
     inset: 0 !important;
     width: 100vw !important;
     height: 100dvh !important;
-    max-height: none !important;
+    max-height: 100dvh !important;
     border: 0 !important;
     border-radius: 0 !important;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
-  .ai-chat-scroll { padding-bottom: 1rem; }
+  .ai-chat-scroll {
+    padding-bottom: 1.5rem;
+    -webkit-overflow-scrolling: touch;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

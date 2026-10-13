@@ -120,7 +120,7 @@ FARMER-FRIENDLY ANSWER FORMAT:
 - Use standard Markdown hyphen bullets (- item). Do not use decorative Unicode bullet characters.
 - Ask 2-3 useful follow-up questions when more context would materially improve general guidance (for example age, stage of lactation, appetite, water intake, duration, fever, udder changes, manure, recent feed changes).
 - Do not force the medical structure onto simple VillageVet service, contact, partnership or business questions; answer those directly and concisely.
-- Aim for roughly 100-260 words for most substantive animal-health questions. Prefer the shortest answer that is still useful. Use fewer words for simple factual questions.
+- Aim for roughly 80-180 words for substantive animal-health questions. Be direct, high-value, and concise so the user gets answers instantly. Use even fewer words for factual or service questions.
 - Finish every sentence and bullet completely. Never end the main answer mid-sentence or mid-bullet.
 - Do not begin the <suggestions> block until the visible answer is complete and ends naturally.
 
@@ -221,8 +221,8 @@ function normalizeHistory(history) {
   if (!Array.isArray(history)) return []
   return history
     .filter((item) => item && (item.role === 'user' || item.role === 'assistant') && typeof item.content === 'string')
-    .slice(-12)
-    .map((item) => ({ role: item.role === 'assistant' ? 'model' : 'user', parts: [{ text: item.content.slice(0, 4000) }] }))
+    .slice(-8)
+    .map((item) => ({ role: item.role === 'assistant' ? 'model' : 'user', parts: [{ text: item.content.slice(0, 3000) }] }))
 }
 
 function validateImage(image) {
@@ -260,7 +260,7 @@ ACTIVE WEBSITE LANGUAGE: ${language}. Respond in ${language} unless the user exp
     },
     contents: [...normalizeHistory(body.history), { role: 'user', parts: userParts }],
     generationConfig: {
-      maxOutputTokens: 1800,
+      maxOutputTokens: 1000,
       thinkingConfig: { thinkingLevel: 'low' },
     },
   }
