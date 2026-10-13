@@ -57,7 +57,7 @@ const HOST = process.env.HOST || '0.0.0.0'
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const DIST_DIR = path.join(APP_ROOT, 'dist')
 const API_KEY = process.env.GEMINI_API_KEY
-const MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash'
+const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite'
 const MAX_BODY = 8 * 1024 * 1024
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
@@ -269,39 +269,35 @@ ACTIVE WEBSITE LANGUAGE: ${language}. Respond in ${language} unless the user exp
 async function geminiFetch(body, streaming = false, signal) {
   const { message, image } = validateBody(body)
   const method = streaming ? 'streamGenerateContent?alt=sse' : 'generateContent'
-  const candidateModels = [MODEL, 'gemini-3.1-flash-lite', 'gemini-flash-latest']
+  const candidateModels = [MODEL, 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3.8-flash']
   const uniqueModels = [...new Set(candidateModels.filter(Boolean))]
 
   let lastResponse = null
   let lastError = null
 
   for (const model of uniqueModels) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      if (attempt > 0) {
-        await new Promise((r) => setTimeout(r, 600))
+    try {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:${method}${method.includes('?') ? '&' : '?'}key=${encodeURIComponent(API_KEY)}`
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': API_KEY,
+        },
+        signal,
+        body: JSON.stringify(requestPayload(body, message, image)),
+      })
+      if (res.ok) {
+        return res
       }
-      try {
-        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:${method}${method.includes('?') ? '&' : '?'}key=${encodeURIComponent(API_KEY)}`
-        const res = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-goog-api-key': API_KEY,
-          },
-          signal,
-          body: JSON.stringify(requestPayload(body, message, image)),
-        })
-        if (res.ok) {
-          return res
-        }
-        lastResponse = res
-        if (res.status !== 503 && res.status !== 429) {
-          return res
-        }
-      } catch (err) {
-        lastError = err
-        if (signal?.aborted) throw err
+      lastResponse = res
+      // If server is 503 (high demand) or 429/404, immediately try the next model without long delay
+      if (res.status !== 503 && res.status !== 429 && res.status !== 404) {
+        return res
       }
+    } catch (err) {
+      lastError = err
+      if (signal?.aborted) throw err
     }
   }
 
