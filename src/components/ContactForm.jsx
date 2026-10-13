@@ -12,7 +12,7 @@ const enquiryTypes = [
   'Other'
 ]
 
-const endpoint = import.meta.env.VITE_CONTACT_FORM_ENDPOINT
+const endpoint = import.meta.env.VITE_CONTACT_FORM_ENDPOINT || '/api/contact'
 
 const initialState = { name: '', phone: '', email: '', enquiryType: enquiryTypes[0], message: '' }
 

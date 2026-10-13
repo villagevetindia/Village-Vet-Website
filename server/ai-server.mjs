@@ -2,6 +2,7 @@ import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { connectDb, isDbConnected, saveEnquiry, saveChatLog } from './db.mjs'
 
 function loadLocalEnv() {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -24,13 +25,14 @@ function loadLocalEnv() {
 }
 
 loadLocalEnv()
+connectDb().catch((err) => console.error('MongoDB startup error:', err.message))
 
 const PORT = Number(process.env.PORT || process.env.AI_PORT || 8787)
 const HOST = process.env.HOST || '0.0.0.0'
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const DIST_DIR = path.join(APP_ROOT, 'dist')
 const API_KEY = process.env.GEMINI_API_KEY
-const MODEL = process.env.GEMINI_MODEL || 'gemini-3.6-flash'
+const MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash'
 const MAX_BODY = 8 * 1024 * 1024
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
@@ -242,15 +244,44 @@ ACTIVE WEBSITE LANGUAGE: ${language}. Respond in ${language} unless the user exp
 async function geminiFetch(body, streaming = false, signal) {
   const { message, image } = validateBody(body)
   const method = streaming ? 'streamGenerateContent?alt=sse' : 'generateContent'
-  return fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(MODEL)}:${method}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-goog-api-key': API_KEY,
-    },
-    signal,
-    body: JSON.stringify(requestPayload(body, message, image)),
-  })
+  const candidateModels = [MODEL, 'gemini-3.1-flash-lite', 'gemini-flash-latest']
+  const uniqueModels = [...new Set(candidateModels.filter(Boolean))]
+
+  let lastResponse = null
+  let lastError = null
+
+  for (const model of uniqueModels) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) {
+        await new Promise((r) => setTimeout(r, 600))
+      }
+      try {
+        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:${method}${method.includes('?') ? '&' : '?'}key=${encodeURIComponent(API_KEY)}`
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': API_KEY,
+          },
+          signal,
+          body: JSON.stringify(requestPayload(body, message, image)),
+        })
+        if (res.ok) {
+          return res
+        }
+        lastResponse = res
+        if (res.status !== 503 && res.status !== 429) {
+          return res
+        }
+      } catch (err) {
+        lastError = err
+        if (signal?.aborted) throw err
+      }
+    }
+  }
+
+  if (lastResponse) return lastResponse
+  throw lastError || new Error('Failed to reach Gemini API')
 }
 
 async function chat(body) {
@@ -265,7 +296,7 @@ async function chat(body) {
   return reply
 }
 
-async function streamChat(body, res) {
+async function streamChat(body, res, meta = {}) {
   const upstreamController = new AbortController()
   const abortUpstream = () => {
     if (!res.writableEnded) upstreamController.abort()
@@ -342,6 +373,15 @@ async function streamChat(body, res) {
     }
 
     if (!rawReply.trim()) throw new Error('VillageVet AI returned no response.')
+    saveChatLog({
+      message: body.message,
+      reply: rawReply,
+      language: body.language,
+      hasImage: Boolean(body.image),
+      imageMimeType: body.image?.mimeType,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+    }).catch((err) => console.error('MongoDB chat log error:', err.message))
     sse(res, { type: 'done', finishReason: finishReason || undefined })
     res.end()
   } catch (error) {
@@ -423,7 +463,43 @@ function serveFrontend(req, res) {
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') return json(res, 204, {})
   if (req.method === 'GET' && req.url === '/api/health') {
-    return json(res, 200, { ok: true, aiConfigured: Boolean(API_KEY), model: MODEL, streaming: true, imageInput: true })
+    return json(res, 200, {
+      ok: true,
+      aiConfigured: Boolean(API_KEY),
+      model: MODEL,
+      streaming: true,
+      imageInput: true,
+      mongodb: {
+        configured: Boolean(process.env.MONGODB_URI),
+        connected: isDbConnected(),
+      },
+    })
+  }
+
+  if (req.method === 'POST' && req.url === '/api/contact') {
+    if (!allowed(clientIp(req))) {
+      return json(res, 429, { error: 'Too many requests. Please wait a minute and try again.' })
+    }
+    try {
+      const body = await readJson(req)
+      if (!body.name?.trim() || !body.phone?.trim() || !body.message?.trim()) {
+        return json(res, 400, { error: 'Please enter your name, phone number, and a message.' })
+      }
+      const result = await saveEnquiry({
+        name: body.name,
+        phone: body.phone,
+        email: body.email,
+        enquiryType: body.enquiryType,
+        message: body.message,
+        source: body.source || 'website_contact_form',
+        ip: clientIp(req),
+        userAgent: req.headers['user-agent'],
+      })
+      return json(res, 200, { ok: true, message: 'Thank you — your enquiry has been received.', id: result.id })
+    } catch (err) {
+      console.error('Contact form submission error:', err)
+      return json(res, 500, { error: 'Failed to process enquiry. Please try again later.' })
+    }
   }
 
   const isChat = req.method === 'POST' && req.url === '/api/chat'
@@ -440,9 +516,18 @@ const server = http.createServer(async (req, res) => {
   try {
     const body = await readJson(req)
     if (isStreamChat) {
-      return await streamChat(body, res)
+      return await streamChat(body, res, { ip: clientIp(req), userAgent: req.headers['user-agent'] })
     }
     const reply = await chat(body)
+    saveChatLog({
+      message: body.message,
+      reply,
+      language: body.language,
+      hasImage: Boolean(body.image),
+      imageMimeType: body.image?.mimeType,
+      ip: clientIp(req),
+      userAgent: req.headers['user-agent'],
+    }).catch((err) => console.error('MongoDB chat log error:', err.message))
     return json(res, 200, { reply })
   } catch (error) {
     if (res.headersSent) {
@@ -469,6 +554,7 @@ server.listen(PORT, HOST, () => {
   console.log(`VillageVet server listening on http://${HOST}:${PORT}`)
   console.log(`Gemini model: ${MODEL}`)
   console.log(`Gemini API key configured: ${Boolean(API_KEY)}`)
+  console.log(`MongoDB configured: ${Boolean(process.env.MONGODB_URI)}`)
   console.log('Streaming chat: enabled')
   console.log('Image analysis: enabled')
   console.log(`Frontend build: ${fs.existsSync(DIST_DIR) ? 'ready' : 'not built (API-only/dev mode)'}`)
